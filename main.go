@@ -127,7 +127,9 @@ func handleUpdate(ctx context.Context, cfg *Config, st *Store, tg *TGClient, u U
 			"/queue    最近任务\n" +
 			"/retry ID 重试失败任务\n" +
 			"/panel    管理面板地址\n\n" +
-			"直接转发频道/群组的媒体消息给我即可入队。")
+			"直接用 #标签名 设好标签，转发公开频道的媒体消息给我即可入队。\n\n" +
+			"使用边界：本工具用于个人归档你有权保存的内容，不判断版权归属或\n" +
+			"频道规则；仅处理公开频道（有 @username）的转发，不处理私密来源。")
 		return
 
 	case "/tag":
@@ -224,9 +226,18 @@ func handleUpdate(ctx context.Context, cfg *Config, st *Store, tg *TGClient, u U
 	if kind == "" {
 		return
 	}
-	channel, link := m.Source()
-	if link == "" {
-		reply("无法构造链接：这条消息不是从频道/群组转发的（私聊转发没有可定位的消息 ID）")
+	channel, link, isPublic := m.Source()
+	if !isPublic {
+		if channel != "" {
+			// 私密频道/群组：明确拒绝，不做任何绕过
+			reply("已忽略：来源是私密频道/群组。\n" +
+				"本工具只归档来自公开频道（有 @username）的转发，" +
+				"不提供绕过频道可见性的能力。\n" +
+				"如果你确实有权保存该内容，请自行通过官方客户端导出。")
+			slog.Warn("拒绝私密来源", "channel", channel, "msg_id", m.MessageID)
+		} else {
+			reply("无法构造链接：这条消息不是从频道/群组转发的（私聊转发没有可定位的消息 ID）")
+		}
 		return
 	}
 	if st.IsDuplicate(m.Chat.ID, m.MessageID) {
@@ -399,6 +410,9 @@ func main() {
 		NewNodeTester(cfg, pool, alert, cfg.MihomoAPI, cfg.NodeGroup).Run(ctx)
 	}()
 
+	slog.Info("使用须知",
+		"scope", "仅归档你有权保存的内容，不判断版权与频道规则",
+		"privacy", "只处理公开频道（有 @username），私密频道一律拒绝")
 	slog.Info("服务就绪",
 		"workers", cfg.MaxWorkers,
 		"tdl_threads", cfg.TDLThreads,

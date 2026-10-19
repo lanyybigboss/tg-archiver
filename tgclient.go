@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -82,12 +81,18 @@ func (m *Message) MediaKind() string {
 	return ""
 }
 
-// Source 解析转发的来源：返回可读频道名与可下载链接。
-// 只有频道/群组转发才能构造出 t.me 链接 —— 私聊转发没有 message_id，无法定位。
-func (m *Message) Source() (name, link string) {
+// Source 解析转发的来源，返回频道名、可下载链接，以及来源是否公开。
+//
+// 只接受有 @username 的公开频道/群组。
+// 没有 username 的来源只能构造 t.me/c/<id>/ 形式的链接，这种链接依赖下载账号
+// 已加入该私密频道才能解析——也就是说，它绕过了频道本身的可见性边界。
+// 本工具不提供这条路径：tdl 本身支持从受保护聊天下载，具备该能力不等于应当默认使用。
+//
+// 返回 link == "" 表示无法定位（私聊转发），isPublic 为 false 时调用方应拒绝入队。
+func (m *Message) Source() (name, link string, isPublic bool) {
 	o := m.ForwardOrigin
 	if o == nil {
-		return "", ""
+		return "", "", false
 	}
 	pick := o.Chat
 	if pick == nil {
@@ -100,22 +105,18 @@ func (m *Message) Source() (name, link string) {
 		}
 	}
 	if pick == nil {
-		return name, ""
+		return name, "", false
 	}
 
 	mid := o.MessageID
 	if mid == 0 {
 		mid = m.MessageID
 	}
-	if pick.Username != "" {
-		return name, fmt.Sprintf("https://t.me/%s/%d", pick.Username, mid)
+	if pick.Username == "" {
+		// 私密频道：不构造链接，交由调用方拒绝
+		return name, "", false
 	}
-	if pick.ID != 0 {
-		cid := strconv.FormatInt(pick.ID, 10)
-		cid = strings.TrimPrefix(cid, "-100")
-		return name, fmt.Sprintf("https://t.me/c/%s/%d", cid, mid)
-	}
-	return name, ""
+	return name, fmt.Sprintf("https://t.me/%s/%d", pick.Username, mid), true
 }
 
 // ── 客户端 + 熔断 ─────────────────────────────────────────
