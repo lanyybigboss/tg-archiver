@@ -27,7 +27,7 @@ type NodeTester struct {
 	group  string
 	client *http.Client
 
-	lastBest string
+	lastBest  string
 	lastSpeed float64
 	lastAt    time.Time
 }

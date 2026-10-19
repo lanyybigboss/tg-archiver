@@ -1,5 +1,9 @@
 # tg-archiver
 
+[![CI](https://github.com/lanyybigboss/tg-archiver/actions/workflows/ci.yml/badge.svg)](https://github.com/lanyybigboss/tg-archiver/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/go-1.23-00ADD8.svg)](https://go.dev)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 把 Telegram 频道/群组里转发过来的媒体，按标签归档到本地 NAS。
 
 单二进制、零运行时依赖、内置 Web 面板。用 Go 写调度层，用 [`tdl`](https://github.com/iyear/tdl) 做实际下载。

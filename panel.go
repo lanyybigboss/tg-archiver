@@ -80,19 +80,19 @@ func (p *Panel) Handler() http.Handler {
 		fails, rebuilds, lastErr := p.tg.Health()
 		pollAge := time.Now().Unix() - lastPollOK.Load()
 		writeJSON(w, 200, map[string]any{
-			"stats":       st,
-			"active":      p.pool.Active(),
-			"workers":     p.cfg.MaxWorkers,
-			"done_total":  p.pool.DoneN(),
-			"fail_total":  p.pool.FailedN(),
-			"cache_limit": p.cfg.CacheLimitGB,
-			"tg_fails":    fails,
-			"tg_rebuilds": rebuilds,
-			"tg_last_err": lastErr,
-			"poll_age":    pollAge,
-			"poll_stale":  pollAge > stalePollSeconds,
-			"server_time": time.Now().Format("2006-01-02 15:04:05"),
-			"auth_on":     p.cfg.PanelToken != "",
+			"stats":          st,
+			"active":         p.pool.Active(),
+			"workers":        p.cfg.MaxWorkers,
+			"done_total":     p.pool.DoneN(),
+			"fail_total":     p.pool.FailedN(),
+			"cache_limit":    p.cfg.CacheLimitGB,
+			"tg_fails":       fails,
+			"tg_rebuilds":    rebuilds,
+			"tg_last_err":    lastErr,
+			"poll_age":       pollAge,
+			"poll_stale":     pollAge > stalePollSeconds,
+			"server_time":    time.Now().Format("2006-01-02 15:04:05"),
+			"auth_on":        p.cfg.PanelToken != "",
 			"unacked_events": p.store.UnackedEventCount(),
 		})
 	}))

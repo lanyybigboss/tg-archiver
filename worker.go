@@ -27,15 +27,15 @@ type WorkerPool struct {
 
 	// 作者库：面板改完后热更新，不用重启服务
 	authorLib atomic.Pointer[AuthorLib]
-	done   atomic.Int64
-	failed atomic.Int64
+	done      atomic.Int64
+	failed    atomic.Int64
 }
 
 func NewWorkerPool(cfg *Config, st *Store, tg *TGClient, alert *Alerter) *WorkerPool {
 	return &WorkerPool{cfg: cfg, store: st, tg: tg, alert: alert}
 }
 
-func (p *WorkerPool) Active() int   { return int(p.active.Load()) }
+func (p *WorkerPool) Active() int { return int(p.active.Load()) }
 
 // SetAuthorLib 热替换作者库（面板增删作者后调用）。
 func (p *WorkerPool) SetAuthorLib(lib *AuthorLib) { p.authorLib.Store(lib) }
@@ -53,7 +53,7 @@ func (p *WorkerPool) ReloadAuthors() {
 	p.authorLib.Store(NewAuthorLib(list))
 	slog.Info("作者库已更新", "count", len(list))
 }
-func (p *WorkerPool) DoneN() int64  { return p.done.Load() }
+func (p *WorkerPool) DoneN() int64   { return p.done.Load() }
 func (p *WorkerPool) FailedN() int64 { return p.failed.Load() }
 
 func (p *WorkerPool) Run(ctx context.Context) {

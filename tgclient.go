@@ -34,32 +34,32 @@ type Chat struct {
 }
 
 type ForwardOrigin struct {
-	Type           string `json:"type"`
-	Date           int64  `json:"date"`
-	Chat           *Chat  `json:"chat"`
-	SenderChat     *Chat  `json:"sender_chat"`
-	MessageID      int64  `json:"message_id"`
-	SenderUser     *User  `json:"sender_user"`
-	SenderUserName string `json:"sender_user_name"`
+	Type            string `json:"type"`
+	Date            int64  `json:"date"`
+	Chat            *Chat  `json:"chat"`
+	SenderChat      *Chat  `json:"sender_chat"`
+	MessageID       int64  `json:"message_id"`
+	SenderUser      *User  `json:"sender_user"`
+	SenderUserName  string `json:"sender_user_name"`
 	AuthorSignature string `json:"author_signature"`
 }
 
 type Message struct {
-	MessageID int64          `json:"message_id"`
-	Date      int64          `json:"date"`
-	Chat      Chat           `json:"chat"`
-	From      *User          `json:"from"`
-	Text      string         `json:"text"`
-	Caption   string         `json:"caption"`
-	Video     json.RawMessage `json:"video"`
-	VideoNote json.RawMessage `json:"video_note"`
-	Animation json.RawMessage `json:"animation"`
-	Photo     json.RawMessage `json:"photo"`
-	Sticker   json.RawMessage `json:"sticker"`
-	Document  json.RawMessage `json:"document"`
-	Audio     json.RawMessage `json:"audio"`
-	Voice     json.RawMessage `json:"voice"`
-	ForwardOrigin *ForwardOrigin `json:"forward_origin"`
+	MessageID     int64           `json:"message_id"`
+	Date          int64           `json:"date"`
+	Chat          Chat            `json:"chat"`
+	From          *User           `json:"from"`
+	Text          string          `json:"text"`
+	Caption       string          `json:"caption"`
+	Video         json.RawMessage `json:"video"`
+	VideoNote     json.RawMessage `json:"video_note"`
+	Animation     json.RawMessage `json:"animation"`
+	Photo         json.RawMessage `json:"photo"`
+	Sticker       json.RawMessage `json:"sticker"`
+	Document      json.RawMessage `json:"document"`
+	Audio         json.RawMessage `json:"audio"`
+	Voice         json.RawMessage `json:"voice"`
+	ForwardOrigin *ForwardOrigin  `json:"forward_origin"`
 }
 
 type Update struct {
@@ -145,9 +145,9 @@ type TGClient struct {
 }
 
 const (
-	poolSize      = 32
-	maxTransport  = 5 // 连续失败达到这个数就重建连接池
-	maxBackoff    = 60 * time.Second
+	poolSize     = 32
+	maxTransport = 5 // 连续失败达到这个数就重建连接池
+	maxBackoff   = 60 * time.Second
 )
 
 func NewTGClient(token, proxy string) *TGClient {

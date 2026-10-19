@@ -121,9 +121,9 @@ func loadConfig() (*Config, error) {
 		MaxRetry:     envInt("MAX_RETRY", 10),
 		PollTimeout:  envInt("POLL_TIMEOUT", 30),
 		// 绑 0.0.0.0 才能让本机 curl/健康检查访问；外网访问由 iptables 挡（INPUT 默认 DROP，只放行内网段）
-		PanelAddr:    envStr("PANEL_ADDR", "0.0.0.0:6186"),
-		PanelToken:   envStr("PANEL_TOKEN", ""),
-		PanelURL:     envStr("PANEL_URL", "http://192.168.1.63:6186/"),
+		PanelAddr:  envStr("PANEL_ADDR", "0.0.0.0:6186"),
+		PanelToken: envStr("PANEL_TOKEN", ""),
+		PanelURL:   envStr("PANEL_URL", "http://127.0.0.1:6186/"),
 
 		AlertWebhook:       envStr("ALERT_WEBHOOK", ""),
 		AlertWebhookFormat: envStr("ALERT_WEBHOOK_FORMAT", "generic"),

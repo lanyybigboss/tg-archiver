@@ -20,11 +20,11 @@ var (
 	reHexHash       = regexp.MustCompile(`^[0-9a-fA-F]{12,}$`)
 	reTechName      = regexp.MustCompile(`(?i)^(trim_head_|trim_|video_|vid_|img_|image_|photo_|file_|download_|unnamed|untitled|result_|output_)`)
 	// 只吃 @ 后紧接的账号名；不能用 \w，那会把 _1 这类序号一起吞掉
-	rePromo         = regexp.MustCompile(`@[A-Za-z0-9]{3,32}`)                       // 频道推广串 @examplechannel
-	reTimecode      = regexp.MustCompile(`\d{2}[.:_]\d{2}[.:_]\d{2}(?:[.:_]\d{1,3})?`) // 00.00.00.000 / 00:03:35:517 / 00_03_35_517
-	reSegSuffix     = regexp.MustCompile(`(?i)[-_]?seg\d+$`)                        // seg1 / -seg2
-	reSepRun        = regexp.MustCompile(`[\s_\-]{2,}`)
-	reEdgeSep       = regexp.MustCompile(`^[\s_\-.]+|[\s_\-.]+$`)
+	rePromo     = regexp.MustCompile(`@[A-Za-z0-9]{3,32}`)                         // 频道推广串 @examplechannel
+	reTimecode  = regexp.MustCompile(`\d{2}[.:_]\d{2}[.:_]\d{2}(?:[.:_]\d{1,3})?`) // 00.00.00.000 / 00:03:35:517 / 00_03_35_517
+	reSegSuffix = regexp.MustCompile(`(?i)[-_]?seg\d+$`)                           // seg1 / -seg2
+	reSepRun    = regexp.MustCompile(`[\s_\-]{2,}`)
+	reEdgeSep   = regexp.MustCompile(`^[\s_\-.]+|[\s_\-.]+$`)
 )
 
 // seqOf 判断文件名是否「就是一个序号」，是则返回它。
@@ -77,8 +77,8 @@ func IsMeaningfulName(stem string) bool {
 
 // CleanStem 去掉噪声，保留可读部分。
 func CleanStem(s string) string {
-	s = rePromo.ReplaceAllString(s, "")     // @推广
-	s = reTimecode.ReplaceAllString(s, "")  // 时间轴
+	s = rePromo.ReplaceAllString(s, "")    // @推广
+	s = reTimecode.ReplaceAllString(s, "") // 时间轴
 	s = reSepRun.ReplaceAllString(s, "_")
 	s = reEdgeSep.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
