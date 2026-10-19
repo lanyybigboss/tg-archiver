@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TG 下载 Bot</title>
+<style>
+:root{
+  --bg:#f6f6f4; --panel:#fff; --border:#e3e3de; --text:#1e1e1c; --muted:#6d6d68;
+  --accent:#185fa5; --ok:#3b6d11; --warn:#854f0b; --bad:#a32d2d; --idle:#6d6d68;
+  --chip:#eeedea;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#17171a; --panel:#202024; --border:#32323a; --text:#eaeae6; --muted:#9a9a94;
+    --accent:#85b7eb; --ok:#97c459; --warn:#ef9f27; --bad:#f09595; --idle:#9a9a94;
+    --chip:#2a2a30;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 20px 60px}
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+h1{font-size:17px;font-weight:500;margin:0}
+.meta{color:var(--muted);font-size:12.5px}
+.meta b{font-weight:500;color:var(--text)}
+.spacer{flex:1}
+button{font:inherit;font-size:13px;padding:5px 12px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border);background:var(--panel);color:var(--text);transition:.15s}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.mini{padding:3px 9px;font-size:12px}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin-bottom:18px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+.card .k{font-size:12px;color:var(--muted);margin-bottom:2px}
+.card .v{font-size:21px;font-weight:500;line-height:1.2}
+.v.ok{color:var(--ok)} .v.bad{color:var(--bad)} .v.acc{color:var(--accent)}
+
+.tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.tab{padding:4px 12px;border-radius:999px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);font-size:12.5px;cursor:pointer}
+.tab.on{background:var(--chip);color:var(--text);border-color:var(--border)}
+
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:880px}
+th,td{padding:9px 10px;text-align:left;font-size:12.5px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+th{color:var(--muted);font-weight:400;border-bottom:1px solid var(--border);font-size:12px}
+tbody tr{border-bottom:1px solid var(--border)}
+tbody tr:last-child{border-bottom:0}
+tbody tr:hover{background:var(--chip)}
+td.num{color:var(--muted)}
+.badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11.5px;
+  border:1px solid currentColor}
+.b-pending{color:var(--idle)} .b-processing{color:var(--accent)}
+.b-done{color:var(--ok)} .b-failed{color:var(--bad)}
+.bar{height:4px;border-radius:2px;background:var(--border);overflow:hidden;margin-top:4px}
+.bar i{display:block;height:100%;background:var(--accent)}
+.empty{padding:34px;text-align:center;color:var(--muted);font-size:13px}
+.tagcell{cursor:pointer;border-bottom:1px dashed var(--border)}
+.tagcell:hover{color:var(--accent)}
+.foot{margin-top:12px;color:var(--muted);font-size:12px;display:flex;gap:16px;flex-wrap:wrap}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);
+  margin-right:5px;vertical-align:middle}
+.dot.bad{background:var(--bad)}
+.formrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.formrow input{flex:1 1 150px;min-width:0;padding:6px 10px;border-radius:8px;
+  border:1px solid var(--border);background:var(--bg);color:var(--text);font:inherit;font-size:12.5px}
+.formrow input:focus{outline:none;border-color:var(--accent)}
+.hint{margin-top:8px;font-size:12px;color:var(--muted);line-height:1.5}
+textarea{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);
+  background:var(--bg);color:var(--text);font:inherit;font-size:12.5px;line-height:1.7;resize:vertical}
+textarea:focus{outline:none;border-color:var(--accent)}
+code{font-family:var(--font-mono,monospace);font-size:11.5px;background:var(--chip);
+  padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>TG 下载 Bot</h1>
+    <div class="meta" id="meta">加载中…</div>
+    <div class="spacer"></div>
+    <button id="btnCleanup" class="mini">清理缓存</button>
+    <button id="btnRefresh" class="mini">刷新</button>
+  </header>
+
+  <section class="cards">
+    <div class="card"><div class="k">待处理</div><div class="v" id="cPending">–</div></div>
+    <div class="card"><div class="k">进行中</div><div class="v acc" id="cProc">–</div></div>
+    <div class="card"><div class="k">已完成</div><div class="v ok" id="cDone">–</div></div>
+    <div class="card"><div class="k">失败</div><div class="v bad" id="cFail">–</div></div>
+    <div class="card"><div class="k">占用空间</div><div class="v" id="cDisk">–</div></div>
+  </section>
+
+  <div class="tabs" id="viewTabs" style="margin-bottom:14px">
+    <button class="tab on" data-view="queue">队列</button>
+    <button class="tab" data-view="authors">作者库</button>
+  </div>
+
+  <div id="viewQueue">
+  <div class="tabs" id="tabs">
+    <button class="tab on" data-status="all">全部</button>
+    <button class="tab" data-status="pending">待处理</button>
+    <button class="tab" data-status="processing">进行中</button>
+    <button class="tab" data-status="done">已完成</button>
+    <button class="tab" data-status="failed">失败</button>
+  </div>
+
+  <div class="panel">
+    <div class="scroll">
+      <table>
+        <colgroup>
+          <col style="width:56px"><col style="width:120px"><col style="width:110px">
+          <col style="width:56px"><col style="width:82px"><col style="width:132px">
+          <col style="width:44px"><col style="width:126px"><col style="width:96px">
+        </colgroup>
+        <thead>
+          <tr><th>ID</th><th>标签</th><th>来源</th><th>类型</th><th>状态</th>
+              <th>进度</th><th>重试</th><th>更新时间</th><th>操作</th></tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="9" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  </div>
+
+  <div id="viewAuthors" style="display:none">
+    <div class="panel" style="padding:14px;margin-bottom:12px">
+      <div class="formrow">
+        <input id="aName" placeholder="作者名（规范名，如 Alice）">
+        <input id="aAlias" placeholder="别名，逗号分隔">
+        <input id="aChannel" placeholder="关联频道/用户名">
+        <input id="aNote" placeholder="备注">
+        <button id="aAdd" class="mini">添加</button>
+      </div>
+      <div class="hint">匹配优先级：文件名里出现 &gt; 频道匹配 &gt; 标签匹配；同一作者命中最长的名字。</div>
+    </div>
+
+    <div class="panel" style="padding:14px;margin-bottom:12px">
+      <div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">
+        批量导入：每行一个，格式 <code>作者名,别名1,别名2</code>，别名可省略；<code>#</code> 开头为注释
+      </div>
+      <textarea id="bulkText" rows="6" placeholder="Alice,alice,A
+StudioX,sx,studio
+Bob"></textarea>
+      <div class="formrow" style="margin-top:8px">
+        <button id="bulkAdd" class="mini">批量导入</button>
+        <button id="syncTags" class="mini">从已有标签补齐</button>
+        <span class="hint" id="bulkResult" style="margin-top:0"></span>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:14px;margin-bottom:12px">
+      <div class="formrow">
+        <input id="pName" placeholder="原始文件名，如 DeltaStudio-00.00.mp4">
+        <input id="pTag" placeholder="标签（=作者）">
+        <button id="pRun" class="mini">预览</button>
+      </div>
+      <div class="hint" id="pResult">预览会显示最终归档文件名，不落盘。</div>
+    </div>
+
+    <div class="panel">
+      <div class="scroll">
+        <table>
+          <colgroup>
+            <col style="width:150px"><col style="width:200px"><col style="width:140px">
+            <col style="width:130px"><col style="width:90px">
+          </colgroup>
+          <thead><tr><th>作者</th><th>别名</th><th>关联频道</th><th>备注</th><th>操作</th></tr></thead>
+          <tbody id="authorRows"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span><span class="dot" id="tgDot"></span><span id="tgState">连接状态未知</span></span>
+    <span id="footExtra"></span>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let curStatus = 'all';
+let token = localStorage.getItem('tgarchiver_token') || '';
+let timer = null;
+
+function fmtBytes(n){
+  if(!n || n < 0) return '0';
+  const u = ['B','KB','MB','GB','TB'];
+  let i = 0, v = n;
+  while(v >= 1024 && i < u.length-1){ v /= 1024; i++; }
+  return (i >= 3 ? v.toFixed(2) : v.toFixed(0)) + ' ' + u[i];
+}
+
+function fmtTime(s){
+  if(!s) return '—';
+  const d = new Date(s.replace(' ', 'T') + 'Z');
+  if(isNaN(d)) return s;
+  const p = (x) => String(x).padStart(2,'0');
+  return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function api(path, opts = {}){
+  const headers = Object.assign({'Content-Type':'application/json'}, opts.headers || {});
+  if(token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(path, Object.assign({}, opts, {headers}));
+  if(res.status === 401){
+    const t = prompt('面板需要访问令牌（PANEL_TOKEN）：', token);
+    if(t){ token = t.trim(); localStorage.setItem('tgarchiver_token', token); return api(path, opts); }
+    throw new Error('未授权');
+  }
+  if(!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+const STATUS_TXT = {pending:'待处理', processing:'进行中', done:'已完成', failed:'失败'};
+
+function renderRows(items){
+  const tb = $('rows');
+  tb.textContent = '';
+  if(!items.length){
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 9; td.className = 'empty'; td.textContent = '暂无任务';
+    tr.appendChild(td); tb.appendChild(tr);
+    return;
+  }
+  for(const it of items){
+    const tr = document.createElement('tr');
+
+    const add = (text, cls) => {
+      const td = document.createElement('td');
+      if(cls) td.className = cls;
+      td.textContent = text;
+      td.title = text;
+      tr.appendChild(td);
+      return td;
+    };
+
+    add('#' + it.id, 'num');
+    const tagTd = add(it.tag || '未分类', 'tagcell');
+    tagTd.onclick = () => changeTag(it);
+    add(it.channel || '未知来源');
+    add(it.media_type || '—');
+
+    const stTd = document.createElement('td');
+    const b = document.createElement('span');
+    b.className = 'badge b-' + it.status;
+    b.textContent = STATUS_TXT[it.status] || it.status;
+    stTd.appendChild(b);
+    tr.appendChild(stTd);
+
+    const prTd = document.createElement('td');
+    const pct = Math.max(0, Math.min(100, it.progress || 0));
+    if(it.status === 'processing'){
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      const fill = document.createElement('i');
+      fill.style.width = pct + '%';
+      bar.appendChild(fill);
+      prTd.appendChild(bar);
+      const txt = document.createElement('div');
+      txt.style.fontSize = '11px'; txt.style.color = 'var(--muted)';
+      txt.textContent = pct.toFixed(0) + '%' + (it.speed ? ' · ' + it.speed : '');
+      prTd.appendChild(txt);
+    } else {
+      prTd.textContent = it.status === 'done' ? '100%' : '—';
+      prTd.style.color = 'var(--muted)';
+    }
+    tr.appendChild(prTd);
+
+    add(String(it.retry_count || 0), 'num');
+    add(fmtTime(it.updated_at), 'num');
+
+    const opTd = document.createElement('td');
+    if(it.status === 'failed'){
+      const btn = document.createElement('button');
+      btn.className = 'mini'; btn.textContent = '重试';
+      btn.onclick = () => act(it.id, 'retry', btn);
+      opTd.appendChild(btn);
+    } else if(it.status === 'pending' || it.status === 'processing'){
+      const btn = document.createElement('button');
+      btn.className = 'mini'; btn.textContent = '取消';
+      btn.onclick = () => act(it.id, 'cancel', btn);
+      opTd.appendChild(btn);
+    } else {
+      opTd.textContent = '—';
+      opTd.style.color = 'var(--muted)';
+    }
+    tr.appendChild(opTd);
+
+    tb.appendChild(tr);
+  }
+}
+
+async function act(id, kind, btn){
+  const label = kind === 'retry' ? '重新入队' : '取消';
+  if(!confirm(`确定要${label} #${id} 吗？`)) return;
+  btn.disabled = true;
+  try{
+    await api(`/api/queue/${id}/${kind}`, {method:'POST'});
+    await refresh();
+  }catch(e){
+    alert('操作失败：' + e.message);
+    btn.disabled = false;
+  }
+}
+
+async function changeTag(it){
+  const t = prompt('修改标签（会改归档目录）：', it.tag);
+  if(!t || t.trim() === it.tag) return;
+  try{
+    await api(`/api/queue/${it.id}/tag`, {
+      method:'POST',
+      body: JSON.stringify({tag: t.trim()})
+    });
+    await refresh();
+  }catch(e){ alert('修改失败：' + e.message); }
+}
+
+async function refresh(){
+  try{
+    const s = await api('/api/stats');
+    const st = s.stats;
+    $('cPending').textContent = st.pending;
+    $('cProc').textContent = st.processing;
+    $('cDone').textContent = st.done;
+    $('cFail').textContent = st.failed;
+    $('cDisk').textContent = fmtBytes(st.disk_bytes);
+    $('meta').innerHTML =
+      `并发 <b>${s.active}/${s.workers}</b> · 缓存上限 <b>${s.cache_limit} GB</b> · ${s.server_time}`;
+
+    const healthy = s.tg_fails === 0 && !s.poll_stale;
+    $('tgDot').className = 'dot' + (healthy ? '' : ' bad');
+    if(s.poll_stale){
+      $('tgState').textContent = `轮询停滞 ${s.poll_age} 秒（进程在但收不到消息）`;
+    } else if(s.tg_fails > 0){
+      $('tgState').textContent = `连接异常（连续失败 ${s.tg_fails}）`;
+    } else {
+      $('tgState').textContent = `轮询正常（${s.poll_age} 秒前收到过）`;
+    }
+    $('footExtra').textContent =
+      `本次累计完成 ${s.done_total} · 失败 ${s.fail_total}` +
+      (s.tg_rebuilds ? ` · 连接池已重建 ${s.tg_rebuilds} 次` : '') +
+      (s.tg_last_err ? ` · ${s.tg_last_err}` : '');
+
+    const q = await api(`/api/queue?status=${curStatus}&limit=200`);
+    renderRows(q.items || []);
+  }catch(e){
+    $('rows').innerHTML = '';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 9; td.className = 'empty'; td.textContent = '加载失败：' + e.message;
+    tr.appendChild(td); $('rows').appendChild(tr);
+  }
+}
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+    tab.classList.add('on');
+    curStatus = tab.dataset.status;
+    refresh();
+  };
+});
+
+$('btnRefresh').onclick = refresh;
+
+$('btnCleanup').onclick = async () => {
+  if(!confirm('立即执行缓存清理？超过上限时按完成时间从旧到新删除本地文件。')) return;
+  try{ await api('/api/cleanup', {method:'POST'}); setTimeout(refresh, 800); }
+  catch(e){ alert('触发失败：' + e.message); }
+};
+
+// ── 视图切换 ──
+let curView = 'queue';
+document.querySelectorAll('#viewTabs .tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('#viewTabs .tab').forEach(t => t.classList.remove('on'));
+    tab.classList.add('on');
+    curView = tab.dataset.view;
+    $('viewQueue').style.display = curView === 'queue' ? '' : 'none';
+    $('viewAuthors').style.display = curView === 'authors' ? '' : 'none';
+    if(curView === 'authors') loadAuthors();
+  };
+});
+
+// ── 作者库 ──
+async function loadAuthors(){
+  try{
+    const d = await api('/api/authors');
+    const tb = $('authorRows');
+    tb.textContent = '';
+    if(!d.items.length){
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5; td.className = 'empty'; td.textContent = '作者库为空';
+      tr.appendChild(td); tb.appendChild(tr);
+      return;
+    }
+    for(const a of d.items){
+      const tr = document.createElement('tr');
+      const cell = (text) => {
+        const td = document.createElement('td');
+        td.textContent = text || '—';
+        td.title = text || '';
+        if(!text) td.style.color = 'var(--muted)';
+        tr.appendChild(td);
+        return td;
+      };
+      cell(a.name); cell(a.aliases); cell(a.channel); cell(a.note);
+
+      const op = document.createElement('td');
+      const eb = document.createElement('button');
+      eb.className = 'mini'; eb.textContent = '改';
+      eb.style.marginRight = '6px';
+      eb.onclick = () => editAuthor(a);
+      const db = document.createElement('button');
+      db.className = 'mini'; db.textContent = '删';
+      db.onclick = () => delAuthor(a);
+      op.appendChild(eb); op.appendChild(db);
+      tr.appendChild(op);
+      tb.appendChild(tr);
+    }
+    $('pResult').textContent = `作者库共 ${d.count} 条。预览会显示最终归档文件名，不落盘。`;
+  }catch(e){ alert('读取作者库失败：' + e.message); }
+}
+
+async function editAuthor(a){
+  const name = prompt('作者名（规范名）：', a.name);
+  if(name === null) return;
+  const aliases = prompt('别名（逗号分隔）：', a.aliases || '');
+  if(aliases === null) return;
+  const channel = prompt('关联频道/用户名：', a.channel || '');
+  if(channel === null) return;
+  try{
+    await api(`/api/authors/${a.id}`, {
+      method:'PUT',
+      body: JSON.stringify({name: name.trim(), aliases, channel, note: a.note || ''})
+    });
+    loadAuthors();
+  }catch(e){ alert('修改失败：' + e.message); }
+}
+
+async function delAuthor(a){
+  if(!confirm(`删除作者「${a.name}」？`)) return;
+  try{
+    await api(`/api/authors/${a.id}`, {method:'DELETE'});
+    loadAuthors();
+  }catch(e){ alert('删除失败：' + e.message); }
+}
+
+$('aAdd').onclick = async () => {
+  const name = $('aName').value.trim();
+  if(!name){ alert('作者名不能为空'); return; }
+  try{
+    await api('/api/authors', {
+      method:'POST',
+      body: JSON.stringify({
+        name,
+        aliases: $('aAlias').value.trim(),
+        channel: $('aChannel').value.trim(),
+        note: $('aNote').value.trim()
+      })
+    });
+    $('aName').value = $('aAlias').value = $('aChannel').value = $('aNote').value = '';
+    loadAuthors();
+  }catch(e){ alert('添加失败：' + e.message); }
+};
+
+$('pRun').onclick = async () => {
+  const q = new URLSearchParams({
+    name: $('pName').value.trim(),
+    tag: $('pTag').value.trim()
+  });
+  try{
+    const d = await api('/api/authors/preview?' + q.toString());
+    $('pResult').textContent =
+      `识别作者：${d.resolved_author || '（未命中，直接用标签）'}　→　最终文件名：${d.final_name}`;
+  }catch(e){ $('pResult').textContent = '预览失败：' + e.message; }
+};
+
+$('bulkAdd').onclick = async () => {
+  const text = $('bulkText').value;
+  if(!text.trim()){ alert('先粘贴内容'); return; }
+  try{
+    const d = await api('/api/authors/bulk', {
+      method:'POST',
+      body: JSON.stringify({text})
+    });
+    $('bulkResult').textContent =
+      `新增 ${d.added}，跳过 ${d.skipped === undefined ? 0 : d.skipped}，现有 ${d.total} 条`;
+    $('bulkText').value = '';
+    loadAuthors();
+  }catch(e){ alert('批量导入失败：' + e.message); }
+};
+
+$('syncTags').onclick = async () => {
+  try{
+    const d = await api('/api/authors/sync_tags', {method:'POST'});
+    $('bulkResult').textContent = `从标签补齐 ${d.added} 条，现有 ${d.total} 条`;
+    loadAuthors();
+  }catch(e){ alert('补齐失败：' + e.message); }
+};
+
+refresh();
+timer = setInterval(refresh, 5000);
+document.addEventListener('visibilitychange', () => {
+  if(document.hidden){ clearInterval(timer); timer = null; }
+  else if(!timer){ refresh(); timer = setInterval(refresh, 5000); }
+});
+</script>
+</body>
+</html>

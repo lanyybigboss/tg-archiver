@@ -1,0 +1,21 @@
+# 编译产物
+tg-archiver
+tgbot
+*.exe
+*.test
+
+# 运行时数据
+/data/
+*.log
+*.log.1
+*.db
+*.db-shm
+*.db-wal
+
+# 凭据
+.env
+*.session
+
+# 系统
+.DS_Store
+Thumbs.db

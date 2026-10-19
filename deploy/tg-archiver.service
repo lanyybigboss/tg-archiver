@@ -1,0 +1,24 @@
+[Unit]
+Description=TG Download Bot (Go, local archive)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=1000
+Group=1001
+WorkingDirectory=/opt/tg-archiver/data
+EnvironmentFile=/opt/tg-archiver/data/.env
+Environment=TZ=Asia/Shanghai
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/tg-archiver/tg-archiver
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# 停服务时要连带回收 tdl 子进程，否则会留孤儿占着文件句柄
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
