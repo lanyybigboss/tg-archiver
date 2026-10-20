@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -138,11 +139,16 @@ type TGClient struct {
 	proxy string
 
 	mu       sync.Mutex
-	client   *http.Client
 	fails    int
 	backoff  time.Duration
 	rebuilds int64
 	lastErr  string
+
+	// clientMu 单独保护 client 指针。
+	// rebuild() 会整体换掉 *http.Client，而 httpClient() 在每次请求前读它 ——
+	// 不加锁就是数据竞争。
+	clientMu sync.RWMutex
+	client   *http.Client
 }
 
 const (
@@ -175,30 +181,57 @@ func (c *TGClient) buildClient() *http.Client {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     true,
+		// 必须禁掉 HTTP/2。
+		//
+		// 起因（2026-10-20 实测）：代理切到对 Telegram 不通的节点后，
+		// 已建立的 HTTP/2 连接变成半开状态 —— 请求挂在
+		// net/http.(*http2ClientConn).roundTrip 的 select 上永不返回，
+		// 连 context 超时都救不回来（栈已抓到）。表现是程序完全静默：
+		// 没有一条失败日志，健康指标一路上涨，却因为没报错而永远不触发
+		// 任何自愈逻辑，于是「假活」持续数小时。
+		//
+		// HTTP/1.1 的连接在 Read 时受 context 控制，半开连接会被超时打断，
+		// 错误也能正常冒泡到轮询失败路径。
+		ForceAttemptHTTP2: false,
+		TLSNextProto:      map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
 	return &http.Client{Transport: tr}
 }
 
 // rebuild 丢弃整个连接池。卡死的半开连接是 Pool timeout 的根源，只能整体换掉。
+//
+// 注意锁的层次：rebuild 只动 clientMu，不碰 c.mu。
+// recordFailure 持有 c.mu 时会调用 rebuild，两个锁不能嵌套成同一把。
 func (c *TGClient) rebuild() {
+	c.clientMu.Lock()
 	if old, ok := c.client.Transport.(*http.Transport); ok {
 		old.CloseIdleConnections()
 	}
 	c.client = c.buildClient()
+	c.clientMu.Unlock()
+
+	c.mu.Lock()
 	c.rebuilds++
+	c.mu.Unlock()
+}
+
+// forceRebuild 无论失败计数如何都强制换掉连接池。
+// 用于看门狗：请求挂在半开连接上时，失败计数根本没机会增长。
+func (c *TGClient) forceRebuild() {
+	c.rebuild()
 }
 
 func (c *TGClient) recordFailure(err error) {
 	// 这里必须自己脱敏：recordFailure 在 call 的 defer 之前执行，
 	// 那时 err 里还带着完整 URL（含 token），存进 lastErr 就会经 /api/stats 暴露出去
 	safe := c.scrub(err)
+
+	needRebuild := false
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.fails++
 	c.lastErr = safe.Error()
 	if c.fails >= maxTransport {
-		c.rebuild()
+		needRebuild = true
 		c.fails = 0
 	}
 	if c.backoff == 0 {
@@ -208,6 +241,12 @@ func (c *TGClient) recordFailure(err error) {
 		if c.backoff > maxBackoff {
 			c.backoff = maxBackoff
 		}
+	}
+	c.mu.Unlock()
+
+	// 重建放在锁外：rebuild 自己会取锁，嵌套会死锁
+	if needRebuild {
+		c.rebuild()
 	}
 }
 
@@ -233,8 +272,8 @@ func (c *TGClient) Health() (int, int64, string) {
 }
 
 func (c *TGClient) httpClient() *http.Client {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.clientMu.RLock()
+	defer c.clientMu.RUnlock()
 	return c.client
 }
 
@@ -371,6 +410,49 @@ func (c *TGClient) GetUpdates(ctx context.Context, offset int64, timeoutSec int,
 	var ups []Update
 	err := c.call(reqCtx, "getUpdates", payload, &ups)
 	return ups, err
+}
+
+// GetUpdatesWatchdog 跑一次长轮询，但带独立的看门狗：
+// 超过 hardLimit 还没返回，就强制取消整个请求并重建连接池。
+//
+// 为什么需要它：2026-10-20 实测到代理切到不通节点后，
+// HTTP/2 的半开连接让 getUpdates 永久挂在 roundTrip 的 select 上，
+// 既不返回也不报错 —— context 超时对它无效（因为请求已经交给 h2 的
+// 连接池排队，ctx 取消只标记不唤醒）。结果程序完全静默：
+// 没有失败日志 → 不进失败路径 → 永远不触发自愈 → 假活数小时。
+//
+// 看门狗从外部强行打断，无论请求挂在哪都能收敛成一次可观测的失败。
+func (c *TGClient) GetUpdatesWatchdog(ctx context.Context, offset int64, timeoutSec int, limit int) ([]Update, error) {
+	hardLimit := time.Duration(timeoutSec)*time.Second + 45*time.Second
+
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type res struct {
+		ups []Update
+		err error
+	}
+	ch := make(chan res, 1)
+
+	go func() {
+		ups, err := c.GetUpdates(reqCtx, offset, timeoutSec, limit)
+		ch <- res{ups, err}
+	}()
+
+	timer := time.NewTimer(hardLimit)
+	defer timer.Stop()
+
+	select {
+	case r := <-ch:
+		return r.ups, r.err
+	case <-timer.C:
+		cancel()
+		// 丢弃可能还在路上的 goroutine 结果（channel 有缓冲，不会泄漏）
+		go func() { <-ch }()
+		// 强制换掉整个连接池：半开连接只存在于被丢弃的 Transport 里
+		c.forceRebuild()
+		return nil, fmt.Errorf("长轮询超时（%s），已强制中断并重建连接池", hardLimit)
+	}
 }
 
 type SendOpts struct {

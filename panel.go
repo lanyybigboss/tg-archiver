@@ -61,8 +61,16 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		last := lastPollOK.Load()
+		// last==0 表示从启动至今一次都没成功轮询过。
+		// 此时 age = now - 0 会是个几十亿的巨大值，必须单独处理，
+		// 否则 poll_age 显示成 1792462292 这种看不懂的数字。
+		if last == 0 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, "stale never_polled_ok\n")
+			return
+		}
 		age := time.Now().Unix() - last
-		if last > 0 && age > stalePollSeconds {
+		if age > stalePollSeconds {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprintf(w, "stale last_poll_ok%ds_ago\n", age)
 			return
@@ -78,7 +86,10 @@ func (p *Panel) Handler() http.Handler {
 		}
 		st.DiskBytes = DirSize(p.cfg.DownloadDir)
 		fails, rebuilds, lastErr := p.tg.Health()
-		pollAge := time.Now().Unix() - lastPollOK.Load()
+		pollAge := int64(-1)
+		if last := lastPollOK.Load(); last > 0 {
+			pollAge = time.Now().Unix() - last
+		}
 		writeJSON(w, 200, map[string]any{
 			"stats":          st,
 			"active":         p.pool.Active(),
@@ -90,7 +101,7 @@ func (p *Panel) Handler() http.Handler {
 			"tg_rebuilds":    rebuilds,
 			"tg_last_err":    lastErr,
 			"poll_age":       pollAge,
-			"poll_stale":     pollAge > stalePollSeconds,
+			"poll_stale":     pollAge < 0 || pollAge > stalePollSeconds,
 			"server_time":    time.Now().Format("2006-01-02 15:04:05"),
 			"auth_on":        p.cfg.PanelToken != "",
 			"unacked_events": p.store.UnackedEventCount(),

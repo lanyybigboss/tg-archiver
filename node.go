@@ -90,6 +90,105 @@ func (t *NodeTester) Run(ctx context.Context) {
 	}
 }
 
+// EnsureReachable 应急救援：确认当前节点还能连 Telegram，不能就换一个。
+//
+// 由轮询失败路径调用（Telegram 连不上时最该做的事就是换出口），
+// 与周期测速无关，不等固定间隔、不受下载任务占用带宽的限制。
+// 返回 true 表示当前（或新切换的）节点确认可连 Telegram。
+func (t *NodeTester) EnsureReachable(ctx context.Context) bool {
+	// 当前节点先试一次，避免无谓的切换
+	if t.telegramReachable() {
+		return true
+	}
+
+	slog.Warn("当前节点连不上 Telegram，启动应急换节点", "group", t.group)
+
+	name, ok := t.pickReachable()
+	if !ok {
+		slog.Error("应急救援失败：所有节点都连不上 Telegram")
+		return false
+	}
+
+	if err := t.switchTo(name); err != nil {
+		slog.Error("应急救援切换节点失败", "node", name, "err", err)
+		return false
+	}
+	time.Sleep(600 * time.Millisecond)
+
+	if !t.telegramReachable() {
+		slog.Error("应急救援后仍连不上 Telegram", "node", name)
+		return false
+	}
+
+	slog.Info("应急救援成功，已切到可连 Telegram 的节点", "node", name)
+	t.lastBest, t.lastAt = name, time.Now()
+	if t.alert != nil {
+		t.alert.Emit("warn", "node_emergency",
+			fmt.Sprintf("Telegram 连不上，已自动切换代理节点到 %s。", name), 0,
+			map[string]any{"node": name})
+	}
+	return true
+}
+
+// pickReachable 用 mihomo 的 per-node delay 接口逐个测「该节点 → api.telegram.org」
+// 的连通性，返回一个能通 Telegram 的节点名。
+//
+// 与 measure() 的区别：
+//   - measure() 走 Cloudflare，测的是带宽，且需要切换策略组（会短暂影响现网流量）
+//   - 这里走 mihomo 的 delay 接口，直接指定单个节点测，且目标就是 Telegram 本身
+//
+// 因此这是判断「这个节点能不能用」的权威依据。
+func (t *NodeTester) pickReachable() (string, bool) {
+	cands, err := t.candidates()
+	if err != nil {
+		slog.Warn("读取节点列表失败", "err", err)
+		return "", false
+	}
+	if len(cands) == 0 {
+		return "", false
+	}
+
+	type delayResult struct {
+		name  string
+		delay int
+	}
+	var ok []delayResult
+
+	for _, name := range cands {
+		u := fmt.Sprintf("%s/proxies/%s/delay?timeout=5000&url=%s",
+			t.apiURL, url.PathEscape(name), url.QueryEscape("https://api.telegram.org/"))
+		req, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := t.apiClient().Do(req)
+		if err != nil {
+			continue
+		}
+		var payload struct {
+			Delay int `json:"delay"`
+		}
+		decErr := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&payload)
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if decErr != nil {
+			continue
+		}
+		if payload.Delay > 0 {
+			ok = append(ok, delayResult{name, payload.Delay})
+		}
+	}
+
+	if len(ok) == 0 {
+		return "", false
+	}
+	// 延迟低的优先
+	sort.Slice(ok, func(i, j int) bool { return ok[i].delay < ok[j].delay })
+	slog.Info("可达性扫描完成", "reachable", len(ok), "of", len(cands),
+		"best", ok[0].name, "delay_ms", ok[0].delay)
+	return ok[0].name, true
+}
+
 // Once 执行一轮：等空闲 → 逐节点测速 → 切到最快。
 func (t *NodeTester) Once(ctx context.Context) {
 	if !t.waitIdle(ctx) {
@@ -97,7 +196,7 @@ func (t *NodeTester) Once(ctx context.Context) {
 		return
 	}
 
-	cands, err := t.candidates()
+	cands, err := t.candidatesWith(t.bandwidthRegions())
 	if err != nil {
 		slog.Warn("读取节点列表失败", "err", err)
 		return
@@ -137,14 +236,15 @@ func (t *NodeTester) Once(ctx context.Context) {
 	}
 
 	// 带宽高 ≠ 能连 Telegram。测速走的是 Cloudflare，某些节点对 TG 是死的。
-	// 在最快的三个里挑第一个真正能连上 Telegram 的。
+	//
+	// 关键：可达性优先于带宽。
+	// 早先的实现在「最快的 3 个都连不上 TG」时选择「保持当前节点不动」，
+	// 可当前节点恰恰就是那个死节点 —— 于是永远锁死在一个不通的出口上，
+	// 表现为进程活着但连续几小时下载 0（2026-10-20 06:00 起即为此症状）。
+	// 现在改成：先按可达性过滤，剩下候选里再按带宽排序。
 	var best result
 	found := false
-	topN := 3
-	if len(results) < topN {
-		topN = len(results)
-	}
-	for _, r := range results[:topN] {
+	for _, r := range results {
 		if r.speed <= 0 {
 			continue
 		}
@@ -159,7 +259,22 @@ func (t *NodeTester) Once(ctx context.Context) {
 		slog.Warn("节点带宽够但连不上 Telegram，跳过", "node", r.name, "mb_s", fmt.Sprintf("%.2f", r.speed))
 	}
 	if !found {
-		slog.Warn("最快的几个节点都连不上 Telegram，保持当前节点不动")
+		// 到这一步说明所有测过速的节点都连不上 TG。此时不能原地不动，
+		// 换用 mihomo 的 per-node delay 接口（不需要切换策略组）再扫一遍，
+		// 找出真正能通 TG 的节点；只要有一个能通就切过去。
+		slog.Warn("所有测速节点都连不上 Telegram，改用可达性接口重扫")
+		if name, ok := t.pickReachable(); ok {
+			if err := t.switchTo(name); err == nil {
+				time.Sleep(500 * time.Millisecond)
+				if t.telegramReachable() {
+					best, found = result{name: name, speed: 0}, true
+					slog.Info("已切到可连 Telegram 的节点（带宽未知）", "node", name)
+				}
+			}
+		}
+	}
+	if !found {
+		slog.Error("没有任何节点能连上 Telegram，保持当前节点不动", "node", t.group)
 		return
 	}
 
@@ -210,7 +325,20 @@ var nonNodeTypes = map[string]bool{
 	"Pass": true, "Relay": true, "Dns": true,
 }
 
+// bandwidthRegions 带宽测速时只覆盖这些地区。
+// 逐个切换策略组测速会短暂影响共用该策略组的其他服务，
+// 所以测速范围收窄；应急救援（EnsureReachable）则扫全部节点。
+func (t *NodeTester) bandwidthRegions() []string {
+	return []string{"Hong Kong", "Japan", "Singapore", "Taiwan"}
+}
+
 func (t *NodeTester) candidates() ([]string, error) {
+	return t.candidatesWith(nil)
+}
+
+// candidatesWith 返回订阅里所有真实节点名。
+// regionOnly 非 nil 时，只保留名称命中这些地区关键词的节点（带宽测速用）。
+func (t *NodeTester) candidatesWith(regionOnly []string) ([]string, error) {
 	req, err := http.NewRequest(http.MethodGet, t.apiURL+"/proxies", nil)
 	if err != nil {
 		return nil, err
@@ -230,7 +358,6 @@ func (t *NodeTester) candidates() ([]string, error) {
 		return nil, err
 	}
 
-	keywords := []string{"Hong Kong", "Japan", "Singapore", "Taiwan"}
 	var out []string
 	for name, p := range payload.Proxies {
 		if nonNodeTypes[p.Type] {
@@ -241,12 +368,19 @@ func (t *NodeTester) candidates() ([]string, error) {
 			strings.Contains(name, "距离下次") {
 			continue
 		}
-		for _, k := range keywords {
-			if strings.Contains(name, k) {
-				out = append(out, name)
-				break
+		if regionOnly != nil {
+			matched := false
+			for _, k := range regionOnly {
+				if strings.Contains(name, k) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
 			}
 		}
+		out = append(out, name)
 	}
 	sort.Strings(out)
 	return out, nil

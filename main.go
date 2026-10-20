@@ -263,7 +263,7 @@ func handleUpdate(ctx context.Context, cfg *Config, st *Store, tg *TGClient, u U
 }
 
 // runPoller 长轮询。offset 落库，重启后不会重复拉取已处理的消息。
-func runPoller(ctx context.Context, cfg *Config, st *Store, tg *TGClient, alert *Alerter) {
+func runPoller(ctx context.Context, cfg *Config, st *Store, tg *TGClient, alert *Alerter, nt *NodeTester) {
 	var offset int64
 	if v := st.GetState("offset", "0"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
@@ -277,8 +277,15 @@ func runPoller(ctx context.Context, cfg *Config, st *Store, tg *TGClient, alert 
 	slog.Info("轮询启动", "offset", offset, "poll_timeout", cfg.PollTimeout)
 
 	consecutiveFails := 0
+	// 每连续失败 N 次触发一次应急换节点（带冷却，避免反复扫全量节点）
+	const rescueEvery = 5
+	const rescueCooldown = 5 * time.Minute
+	var lastRescue time.Time
+	// 节点救援是串行的，避免并发切换策略组
+	rescueMu := sync.Mutex{}
+
 	for ctx.Err() == nil {
-		ups, err := tg.GetUpdates(ctx, offset, cfg.PollTimeout, 100)
+		ups, err := tg.GetUpdatesWatchdog(ctx, offset, cfg.PollTimeout, 100)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -303,6 +310,21 @@ func runPoller(ctx context.Context, cfg *Config, st *Store, tg *TGClient, alert 
 					fmt.Sprintf("轮询连续失败 %d 次，连接池已重建 %d 次：%s",
 						consecutiveFails, rebuilds, truncateRunes(err.Error(), 300)), 0, nil)
 			}
+			// 治本：连不上多半是出口节点死了。以前这里只退避重试，
+			// 于是能在死节点上原地空转几小时（进程活着但一条也下不动）。
+			// 现在每连续失败 5 次就换一次节点，带 5 分钟冷却。
+			if nt != nil && consecutiveFails%rescueEvery == 0 &&
+				time.Since(lastRescue) >= rescueCooldown {
+				rescueMu.Lock()
+				lastRescue = time.Now()
+				rescueMu.Unlock()
+				go func(fails int) {
+					if ok := nt.EnsureReachable(ctx); ok {
+						slog.Info("应急换节点完成，重试轮询", "consecutive", fails)
+					}
+				}(consecutiveFails)
+			}
+
 			sleepCtx(ctx, wait)
 			continue
 		}
@@ -386,6 +408,7 @@ func main() {
 	pool := NewWorkerPool(cfg, st, tg, alert)
 	pool.ReloadAuthors()
 	panel := NewPanel(cfg, st, tg, pool, alert)
+	nodeTester := NewNodeTester(cfg, pool, alert, cfg.MihomoAPI, cfg.NodeGroup)
 
 	srv := newHTTPServer(cfg.PanelAddr, panel.Handler())
 	go func() {
@@ -407,7 +430,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		NewNodeTester(cfg, pool, alert, cfg.MihomoAPI, cfg.NodeGroup).Run(ctx)
+		nodeTester.Run(ctx)
 	}()
 
 	slog.Info("使用须知",
@@ -420,7 +443,7 @@ func main() {
 		"tdl_timeout", cfg.TDLTimeout.String(),
 		"base", cfg.BaseDir)
 
-	runPoller(ctx, cfg, st, tg, alert)
+	runPoller(ctx, cfg, st, tg, alert, nodeTester)
 
 	slog.Info("收到停止信号，正在退出…")
 	stop()
